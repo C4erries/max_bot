@@ -1,0 +1,23 @@
+package config
+
+// Config содержит все параметры, необходимые для запуска бота.
+type Config struct {
+	Bot    BotConfig
+	HTTP   HTTPConfig
+	Logger LoggerConfig
+}
+
+// BotConfig хранит токен и базовые настройки для Max.
+type BotConfig struct {
+	Token string `env:"BOT_TOKEN,required"`
+}
+
+// HTTPConfig задаёт адрес вспомогательного HTTP-сервера.
+type HTTPConfig struct {
+	Address string `env:"HTTP_ADDRESS" envDefault:":8080"`
+}
+
+// LoggerConfig описывает уровень логирования.
+type LoggerConfig struct {
+	Level string `env:"LOG_LEVEL" envDefault:"info"`
+}

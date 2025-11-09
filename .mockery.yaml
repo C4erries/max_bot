@@ -1,0 +1,12 @@
+with-expecter: true
+filename: "{{.InterfaceName | snakecase}}.go"
+mockname: "{{.InterfaceName | firstUpper}}"
+outpkg: mocks
+packages:
+  github.com/c4erries/max_bot/internal/appbot:
+    interfaces:
+      UpdatesProvider: {}
+      MessageSender: {}
+    config:
+      dir: internal/appbot/mocks
+      outpkg: mocks
