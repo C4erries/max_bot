@@ -10,6 +10,7 @@ import (
 	"github.com/c4erries/max_bot/internal/app"
 	"github.com/c4erries/max_bot/internal/appbot"
 	"github.com/c4erries/max_bot/internal/config"
+	"github.com/c4erries/max_bot/internal/httpserver"
 	"github.com/c4erries/max_bot/internal/logger"
 	maxbot "github.com/max-messenger/max-bot-api-client-go"
 )
@@ -32,7 +33,12 @@ func main() {
 	}
 
 	bot := appbot.NewService(api, log)
-	application := app.New(bot, log)
+	application := app.New(bot, log, cfg)
+
+	if addr := cfg.HTTP.Address; addr != "" {
+		httpSrv := httpserver.New(addr, bot, log)
+		application.RegisterModule("http", httpSrv)
+	}
 
 	log.Info().Msg("max bot starting up")
 	if err := application.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {

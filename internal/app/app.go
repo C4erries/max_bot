@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/c4erries/max_bot/internal/appbot"
+	"github.com/c4erries/max_bot/internal/config"
 	"github.com/rs/zerolog"
 )
 
@@ -27,12 +28,20 @@ type moduleEntry struct {
 }
 
 // New собирает приложение, регистрирует бота и базовые обработчики.
-func New(bot *appbot.Service, log zerolog.Logger) *Application {
+func New(bot *appbot.Service, log zerolog.Logger, cfg *config.Config) *Application {
 	if bot == nil {
 		panic("app: bot service is nil")
 	}
+	if cfg == nil {
+		panic("app: config is nil")
+	}
 
-	registerDefaultBotHandlers(bot)
+	applications, err := newApplicationCoordinator(cfg.Backend.APIBaseURL, log)
+	if err != nil {
+		panic(fmt.Sprintf("app: %v", err))
+	}
+
+	registerDefaultBotHandlers(bot, applications)
 
 	return &Application{
 		log: log.With().Str("component", "app").Logger(),
