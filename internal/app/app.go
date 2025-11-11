@@ -41,7 +41,17 @@ func New(bot *appbot.Service, log zerolog.Logger, cfg *config.Config) *Applicati
 		panic(fmt.Sprintf("app: %v", err))
 	}
 
-	registerDefaultBotHandlers(bot, applications)
+	payments, err := newPaymentService(cfg.Backend.APIBaseURL, log)
+	if err != nil {
+		panic(fmt.Sprintf("app: %v", err))
+	}
+
+	schedule, err := newScheduleService(cfg.Backend.APIBaseURL, log)
+	if err != nil {
+		panic(fmt.Sprintf("app: %v", err))
+	}
+
+	registerDefaultBotHandlers(bot, applications, payments, schedule)
 
 	return &Application{
 		log: log.With().Str("component", "app").Logger(),

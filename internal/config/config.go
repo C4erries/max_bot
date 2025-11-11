@@ -25,5 +25,5 @@ type LoggerConfig struct {
 
 // BackendConfig описывает параметры взаимодействия с backend API.
 type BackendConfig struct {
-	APIBaseURL string `env:"BACKEND_API_BASE_URL" envDefault:"http://localhost:8010"`
+	APIBaseURL string `env:"BACKEND_API_BASE_URL" envDefault:""`
 }

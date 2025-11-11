@@ -1,32 +1,29 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"strings"
-	"time"
 
+	"github.com/c4erries/max_bot/internal/backend"
+	"github.com/max-messenger/max-bot-api-client-go/schemes"
 	"github.com/rs/zerolog"
 )
 
-type applicationRole string
+type applicationRole = backend.Role
 
-type applicationType string
+type applicationType = backend.ApplicationType
 
 const (
-	roleStudent applicationRole = "student"
-	roleTeacher applicationRole = "teacher"
+	roleStudent applicationRole = backend.RoleStudent
+	roleTeacher applicationRole = backend.RoleTeacher
 
-	applicationTypeStudyCertificate applicationType = "study_certificate"
-	applicationTypeAcademicLeave    applicationType = "academic_leave"
-	applicationTypeStudyTransfer    applicationType = "study_transfer"
-	applicationTypeWorkCertificate  applicationType = "work_certificate"
+	applicationTypeStudyCertificate applicationType = backend.ApplicationTypeStudyCertificate
+	applicationTypeAcademicLeave    applicationType = backend.ApplicationTypeAcademicLeave
+	applicationTypeStudyTransfer    applicationType = backend.ApplicationTypeStudyTransfer
+	applicationTypeWorkCertificate  applicationType = backend.ApplicationTypeWorkCertificate
 )
 
 type fieldKind string
@@ -50,26 +47,27 @@ type applicationForm struct {
 	Fields []applicationField
 }
 
-// applicationBackend определяет контракт общения с внешним сервисом.
-type applicationBackend interface {
-	ResolveRole(ctx context.Context, userID int64) (applicationRole, error)
-	SubmitApplication(ctx context.Context, userID int64, role applicationRole, docType applicationType, payload map[string]string) error
-}
-
 // applicationCoordinator отвечает за выдачу форм и общение с backend.
 type applicationCoordinator struct {
-	backend applicationBackend
-	forms   map[applicationType]applicationForm
+	backend     backend.Applications
+	forms       map[applicationType]applicationForm
+	mockBackend backend.MockApplications
 }
 
 func newApplicationCoordinator(baseURL string, log zerolog.Logger) (*applicationCoordinator, error) {
-	backend, err := newHTTPApplicationBackend(baseURL, log)
+	appBackend, err := backend.NewApplications(baseURL, log)
 	if err != nil {
 		return nil, err
 	}
+
+	var mock backend.MockApplications
+	if mv, ok := appBackend.(backend.MockApplications); ok {
+		mock = mv
+	}
 	return &applicationCoordinator{
-		backend: backend,
-		forms:   defaultApplicationForms(),
+		backend:     appBackend,
+		forms:       defaultApplicationForms(),
+		mockBackend: mock,
 	}, nil
 }
 
@@ -107,6 +105,13 @@ func (c *applicationCoordinator) Submit(ctx context.Context, userID int64, data 
 		data.Values = make(map[string]string)
 	}
 	return c.backend.SubmitApplication(ctx, userID, data.Role, data.Type, data.Values)
+}
+
+func (c *applicationCoordinator) MockSubmittedFiles(userID int64) map[string][]schemes.FileAttachment {
+	if c == nil || c.mockBackend == nil {
+		return nil
+	}
+	return c.mockBackend.StoredFiles(userID)
 }
 
 type applicationSessionData struct {
@@ -303,121 +308,4 @@ func (f applicationForm) clone() applicationForm {
 
 func formatSuccessMessage(title string) string {
 	return fmt.Sprintf("Заявка «%s» отправлена. Как только появится ответ — мы сообщим вам в этом чате.", title)
-}
-
-type httpApplicationBackend struct {
-	baseURL string
-	client  *http.Client
-	log     zerolog.Logger
-}
-
-func newHTTPApplicationBackend(baseURL string, log zerolog.Logger) (*httpApplicationBackend, error) {
-	base := strings.TrimSpace(baseURL)
-	if base == "" {
-		return nil, fmt.Errorf("application backend: base url is empty")
-	}
-	if !strings.Contains(base, "://") {
-		base = "http://" + base
-	}
-	parsed, err := url.Parse(base)
-	if err != nil {
-		return nil, fmt.Errorf("application backend: parse base url: %w", err)
-	}
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	cleaned := strings.TrimRight(parsed.String(), "/")
-	if cleaned == "" {
-		return nil, fmt.Errorf("application backend: resolved base url is empty")
-	}
-
-	return &httpApplicationBackend{
-		baseURL: cleaned,
-		client:  &http.Client{Timeout: 10 * time.Second},
-		log:     log.With().Str("component", "application-backend").Logger(),
-	}, nil
-}
-
-func (b *httpApplicationBackend) ResolveRole(ctx context.Context, userID int64) (applicationRole, error) {
-	path := fmt.Sprintf("/api/users/%d/role", userID)
-	var resp roleResponse
-	if err := b.doRequest(ctx, http.MethodGet, path, nil, &resp); err != nil {
-		return "", err
-	}
-	role := applicationRole(strings.ToLower(strings.TrimSpace(resp.Role)))
-	if !isSupportedRole(role) {
-		return "", fmt.Errorf("backend returned unsupported role %q", resp.Role)
-	}
-	return role, nil
-}
-
-func (b *httpApplicationBackend) SubmitApplication(ctx context.Context, userID int64, role applicationRole, docType applicationType, payload map[string]string) error {
-	reqBody := submitRequest{
-		UserID:  userID,
-		Role:    role,
-		Type:    docType,
-		Payload: payload,
-	}
-	return b.doRequest(ctx, http.MethodPost, "/api/applications/submissions", reqBody, nil)
-}
-
-func (b *httpApplicationBackend) doRequest(ctx context.Context, method, path string, body interface{}, out interface{}) error {
-	fullURL := fmt.Sprintf("%s%s", b.baseURL, path)
-
-	var reqBody io.Reader
-	if body != nil {
-		var buf bytes.Buffer
-		if err := json.NewEncoder(&buf).Encode(body); err != nil {
-			return fmt.Errorf("encode request body: %w", err)
-		}
-		reqBody = &buf
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, fullURL, reqBody)
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := b.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("backend %s %s returned %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(snippet)))
-	}
-
-	if out == nil {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("decode backend response: %w", err)
-	}
-	return nil
-}
-
-type roleResponse struct {
-	Role string `json:"role"`
-}
-
-type submitRequest struct {
-	UserID  int64             `json:"user_id"`
-	Role    applicationRole   `json:"role"`
-	Type    applicationType   `json:"type"`
-	Payload map[string]string `json:"payload"`
-}
-
-func isSupportedRole(role applicationRole) bool {
-	switch role {
-	case roleStudent, roleTeacher:
-		return true
-	default:
-		return false
-	}
 }

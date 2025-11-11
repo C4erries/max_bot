@@ -70,7 +70,10 @@ func (cc *CallbackContext) ReplyText(ctx context.Context, text string) error {
 // Answer отправляет ответ на callback, чтобы клиент перестал ожидать.
 func (cc *CallbackContext) Answer(ctx context.Context, answer *schemes.CallbackAnswer) error {
 	if answer == nil {
-		answer = &schemes.CallbackAnswer{}
+		return nil
+	}
+	if answer.Notification == "" && answer.Message == nil {
+		return nil
 	}
 	if cc.service.api == nil || cc.service.api.Messages == nil {
 		return fmt.Errorf("appbot: api client is nil")
@@ -92,4 +95,9 @@ func (cc *CallbackContext) SetSessionState(state SessionState) {
 // ClearSessionState сбрасывает состояние пользователя.
 func (cc *CallbackContext) ClearSessionState() {
 	cc.service.ClearSessionState(cc.SenderID())
+}
+
+// Service возвращает ссылку на bot-service (нужна для отправки произвольных сообщений).
+func (cc *CallbackContext) Service() *Service {
+	return cc.service
 }

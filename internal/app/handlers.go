@@ -7,17 +7,19 @@ import (
 	"strings"
 
 	"github.com/c4erries/max_bot/internal/appbot"
+	maxbot "github.com/max-messenger/max-bot-api-client-go"
 	"github.com/max-messenger/max-bot-api-client-go/schemes"
 )
 
 const (
 	menuRoot                = "menu:root"
-	menuPayments            = "menu:payments"
 	menuSchedule            = "menu:schedule"
 	menuApplicationsStudent = "menu:applications:student"
 	menuApplicationsTeacher = "menu:applications:teacher"
 
 	actionPaymentRequestOrder             = "action:payment:request_order"
+	actionPaymentDormPay                  = "action:payment:pay_dorm"
+	actionPaymentTuitionPay               = "action:payment:pay_tuition"
 	actionScheduleToday                   = "action:schedule:today"
 	actionApplicationsOpen                = "action:applications:open"
 	actionApplicationStudentStudyCert     = "action:application:student:study_certificate"
@@ -25,8 +27,7 @@ const (
 	actionApplicationStudentTransfer      = "action:application:student:study_transfer"
 	actionApplicationTeacherWorkCert      = "action:application:teacher:work_certificate"
 
-	sessionPaymentWaitingOrder = "payment:waiting_order"
-	sessionApplicationFilling  = "application:filling"
+	sessionApplicationFilling = "application:filling"
 )
 
 type applicationActionMeta struct {
@@ -53,19 +54,34 @@ var applicationActionPayloads = map[string]applicationActionMeta{
 	},
 }
 
-func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCoordinator) {
+func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCoordinator, payments *paymentService, schedule *scheduleService) {
 	if bot == nil {
 		panic("app: bot service is nil")
 	}
 	if applications == nil {
 		panic("app: application coordinator is nil")
 	}
+	if payments == nil {
+		panic("app: payment service is nil")
+	}
+	if schedule == nil {
+		panic("app: schedule service is nil")
+	}
 	menus := NewMenuRegistry(bot)
 	registerMenus(menus)
 
+	bot.RegisterBotStartedHandler(func(ctx context.Context, start *appbot.BotStartedContext) error {
+		if err := menus.Send(ctx, start.ChatID(), start.UserID(), menuRoot); err != nil && err.Error() != "" {
+			logger := start.Logger()
+			logger.Error().Err(err).Msg("failed to send menu on bot start")
+			return start.ReplyText(ctx, "Главное меню временно недоступно. Отправьте /start чуть позже.")
+		}
+		return nil
+	})
+
 	bot.RegisterCommand(appbot.Command{
 		Name:        "start",
-		Description: "Show the main menu",
+		Description: "Показать главное меню",
 		Handler: func(ctx context.Context, msg *appbot.MessageContext) error {
 			msg.ClearSessionState()
 			if err := menus.Send(ctx, msg.ChatID(), msg.SenderID(), menuRoot); err != nil && err.Error() != "" {
@@ -79,7 +95,7 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 
 	bot.RegisterCommand(appbot.Command{
 		Name:        "help",
-		Description: "Display the list of available commands",
+		Description: "Показать список доступных команд",
 		Handler: func(ctx context.Context, msg *appbot.MessageContext) error {
 			commands := bot.Commands()
 			if len(commands) == 0 {
@@ -176,35 +192,68 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 			}
 			return cb.ReplyText(ctx, sessionData.StartPrompt())
 		case payload == actionPaymentRequestOrder:
-			cb.SetSessionState(appbot.SessionState{Step: sessionPaymentWaitingOrder})
-			if err := cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Жду номер заказа"}); err != nil {
-				return err
+			status, err := payments.Status(ctx, cb.SenderID())
+			if err != nil {
+				logger := cb.Logger()
+				logger.Error().Err(err).Msg("failed to fetch payment status")
+				return cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Не удалось проверить оплату. Попробуйте позже"})
 			}
-			return cb.ReplyText(ctx, "Пришлите номер заказа в следующем сообщении.")
-		case payload == actionScheduleToday:
+			if !status.NeedDorm && !status.NeedTuition {
+				if err := cb.Answer(ctx, nil); err != nil {
+					return err
+				}
+				return cb.ReplyText(ctx, "Оплата не требуется — задолженностей нет.")
+			}
+
+			builder := cb.Service().NewKeyboardBuilder()
+			if builder == nil {
+				return cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Не удалось построить меню оплат"})
+			}
+
+			row := builder.AddRow()
+			if status.NeedDorm {
+				row.AddCallback("Оплатить общежитие", schemes.POSITIVE, actionPaymentDormPay)
+			}
+			if status.NeedTuition {
+				if status.NeedDorm {
+					row = builder.AddRow()
+				}
+				row.AddCallback("Оплатить обучение", schemes.POSITIVE, actionPaymentTuitionPay)
+			}
+
+			backRow := builder.AddRow()
+			backRow.AddCallback("Назад", schemes.DEFAULT, menuRoot)
+
 			if err := cb.Answer(ctx, nil); err != nil {
 				return err
 			}
-			return cb.ReplyText(ctx, "Сегодня все свободны. Проверьте меню позже для обновлений.")
+
+			msg := maxbot.NewMessage().SetText("Выберите платеж, который хотите внести:")
+			msg.SetUser(cb.SenderID())
+			msg.SetChat(cb.ChatID())
+			msg.AddKeyboard(builder)
+			_, sendErr := cb.Service().SendMessage(ctx, msg)
+			return sendErr
+		case payload == actionPaymentDormPay:
+			return sendPaymentLink(ctx, cb, payments, paymentKindDorm, "Оплатить общежитие можно по ссылке: %s")
+		case payload == actionPaymentTuitionPay:
+			return sendPaymentLink(ctx, cb, payments, paymentKindTuition, "Оплатить обучение можно по ссылке: %s")
+		case payload == actionScheduleToday:
+			text, err := schedule.Today(ctx, cb.SenderID())
+			if err != nil {
+				logger := cb.Logger()
+				logger.Error().Err(err).Msg("failed to fetch schedule")
+				return cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Не удалось получить расписание"})
+			}
+			if err := cb.Answer(ctx, nil); err != nil {
+				return err
+			}
+			return cb.ReplyText(ctx, text)
 		default:
 			return cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Неизвестное действие"})
 		}
 	})
 
-	bot.RegisterSessionHandler(sessionPaymentWaitingOrder, func(ctx context.Context, msg *appbot.MessageContext, state appbot.SessionState) error {
-		orderID := strings.TrimSpace(msg.Text())
-		if orderID == "" {
-			return msg.ReplyText(ctx, "Номер заказа не должен быть пустым. Напишите его ещё раз.")
-		}
-
-		msg.ClearSessionState()
-		if err := msg.Replyf(ctx, "Заказ %s принят. Мы свяжемся с вами после проверки.", orderID); err != nil {
-			return err
-		}
-		return menus.Send(ctx, msg.ChatID(), msg.SenderID(), menuRoot)
-	})
-
-	// Обрабатываем пошаговое заполнение заявки (текст и файлы).
 	bot.RegisterSessionHandler(sessionApplicationFilling, func(ctx context.Context, msg *appbot.MessageContext, state appbot.SessionState) error {
 		progress, err := applicationSessionFromPayload(state.Payload)
 		if err != nil {
@@ -311,59 +360,14 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 func registerMenus(menus *MenuRegistry) {
 	menus.Register(Menu{
 		ID:    menuRoot,
-		Title: "Главное меню. Выберите раздел:",
+		Title: "Главное меню: выберите раздел",
 		Rows: [][]MenuButton{
 			{
-				{Text: "Оплата", Payload: menuPayments, Intent: schemes.POSITIVE},
+				{Text: "Платежи", Payload: actionPaymentRequestOrder, Intent: schemes.POSITIVE},
 				{Text: "Расписание", Payload: menuSchedule, Intent: schemes.DEFAULT},
 			},
 			{
-				{Text: "Подать заявку", Payload: actionApplicationsOpen, Intent: schemes.POSITIVE},
-			},
-		},
-	})
-
-	menus.Register(Menu{
-		ID:    menuPayments,
-		Title: "Оплата: что нужно сделать?",
-		Rows: [][]MenuButton{
-			{
-				{Text: "Ввести номер заказа", Payload: actionPaymentRequestOrder, Intent: schemes.POSITIVE},
-			},
-			{
-				{Text: "Назад", Payload: menuRoot, Intent: schemes.DEFAULT},
-			},
-		},
-	})
-
-	menus.Register(Menu{
-		ID:    menuApplicationsStudent,
-		Title: "Выберите подходящую заявку:",
-		Rows: [][]MenuButton{
-			{
-				{Text: "Справка об обучении", Payload: actionApplicationStudentStudyCert, Intent: schemes.POSITIVE},
-			},
-			{
-				{Text: "Академический отпуск", Payload: actionApplicationStudentAcademicLeave, Intent: schemes.DEFAULT},
-			},
-			{
-				{Text: "Перевод на другое направление", Payload: actionApplicationStudentTransfer, Intent: schemes.DEFAULT},
-			},
-			{
-				{Text: "Назад", Payload: menuRoot, Intent: schemes.DEFAULT},
-			},
-		},
-	})
-
-	menus.Register(Menu{
-		ID:    menuApplicationsTeacher,
-		Title: "Заявки для преподавателей:",
-		Rows: [][]MenuButton{
-			{
-				{Text: "Справка с места работы", Payload: actionApplicationTeacherWorkCert, Intent: schemes.POSITIVE},
-			},
-			{
-				{Text: "Назад", Payload: menuRoot, Intent: schemes.DEFAULT},
+				{Text: "Заявления", Payload: actionApplicationsOpen, Intent: schemes.POSITIVE},
 			},
 		},
 	})
@@ -373,7 +377,39 @@ func registerMenus(menus *MenuRegistry) {
 		Title: "Расписание:",
 		Rows: [][]MenuButton{
 			{
-				{Text: "На сегодня", Payload: actionScheduleToday, Intent: schemes.DEFAULT},
+				{Text: "Показать расписание на сегодня", Payload: actionScheduleToday, Intent: schemes.DEFAULT},
+			},
+			{
+				{Text: "Назад", Payload: menuRoot, Intent: schemes.DEFAULT},
+			},
+		},
+	})
+
+	menus.Register(Menu{
+		ID:    menuApplicationsStudent,
+		Title: "Заявления студентов:",
+		Rows: [][]MenuButton{
+			{
+				{Text: "Справка с места учебы", Payload: actionApplicationStudentStudyCert, Intent: schemes.POSITIVE},
+			},
+			{
+				{Text: "Академический отпуск", Payload: actionApplicationStudentAcademicLeave, Intent: schemes.POSITIVE},
+			},
+			{
+				{Text: "Перевод на другую программу", Payload: actionApplicationStudentTransfer, Intent: schemes.POSITIVE},
+			},
+			{
+				{Text: "Назад", Payload: menuRoot, Intent: schemes.DEFAULT},
+			},
+		},
+	})
+
+	menus.Register(Menu{
+		ID:    menuApplicationsTeacher,
+		Title: "Заявления преподавателей:",
+		Rows: [][]MenuButton{
+			{
+				{Text: "Справка с места работы", Payload: actionApplicationTeacherWorkCert, Intent: schemes.POSITIVE},
 			},
 			{
 				{Text: "Назад", Payload: menuRoot, Intent: schemes.DEFAULT},
@@ -390,4 +426,18 @@ func encodeAttachments(raw []json.RawMessage) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// sendPaymentLink запрашивает ссылку на оплату и отправляет её пользователю.
+func sendPaymentLink(ctx context.Context, cb *appbot.CallbackContext, payments *paymentService, kind paymentKind, template string) error {
+	link, err := payments.Link(ctx, cb.SenderID(), kind)
+	if err != nil {
+		logger := cb.Logger()
+		logger.Error().Err(err).Str("payment_kind", string(kind)).Msg("failed to create payment link")
+		return cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Не удалось сформировать ссылку на оплату"})
+	}
+	if err := cb.Answer(ctx, nil); err != nil {
+		return err
+	}
+	return cb.ReplyText(ctx, fmt.Sprintf(template, link))
 }

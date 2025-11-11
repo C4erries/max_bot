@@ -31,6 +31,8 @@ type MessageHandler func(context.Context, *MessageContext) error
 // CallbackHandler ╨╛╨▒╤А╨░╨▒╨░╤В╤Л╨▓╨░╨╡╤В ╨╜╨░╨╢╨░╤В╨╕╤П ╨╜╨░ ╨║╨╜╨╛╨┐╨║╨╕ ╨╕╨╜╨╗╨░╨╣╨╜-╨║╨╗╨░╨▓╨╕╨░╤В╤Г╤А╤Л.
 type CallbackHandler func(context.Context, *CallbackContext) error
 
+type BotStartedHandler func(context.Context, *BotStartedContext) error
+
 // Command ╨╛╨┐╨╕╤Б╤Л╨▓╨░╨╡╤В ╨╛╨▒╤А╨░╨▒╨╛╤В╤З╨╕╨║, ╨║╨╛╤В╨╛╤А╤Л╨╣ ╨╝╨╛╨╢╨╜╨╛ ╨╖╨░╤А╨╡╨│╨╕╤Б╤В╤А╨╕╤А╨╛╨▓╨░╤В╤М ╨▓ ╤Б╨╡╤А╨▓╨╕╤Б╨╡ ╨▒╨╛╤В╨░.
 type Command struct {
 	Name        string
@@ -52,11 +54,12 @@ type Service struct {
 	updates UpdatesProvider
 	sender  MessageSender
 
-	mu               sync.RWMutex
-	commandOrder     []string
-	commands         map[string]commandEntry
-	messageHandlers  []MessageHandler
-	callbackHandlers []CallbackHandler
+	mu                 sync.RWMutex
+	commandOrder       []string
+	commands           map[string]commandEntry
+	messageHandlers    []MessageHandler
+	callbackHandlers   []CallbackHandler
+	botStartedHandlers []BotStartedHandler
 
 	sessions        map[int64]SessionState
 	sessionHandlers map[string]SessionHandler
@@ -138,6 +141,17 @@ func (s *Service) RegisterCallbackHandler(handler CallbackHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.callbackHandlers = append(s.callbackHandlers, handler)
+}
+
+// RegisterBotStartedHandler добавляет обработчик события "Start".
+func (s *Service) RegisterBotStartedHandler(handler BotStartedHandler) {
+	if handler == nil {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.botStartedHandlers = append(s.botStartedHandlers, handler)
 }
 
 // RegisterSessionHandler ╤А╨╡╨│╨╕╤Б╤В╤А╨╕╤А╤Г╨╡╤В ╨╛╨▒╤А╨░╨▒╨╛╤В╤З╨╕╨║ ╨┤╨╗╤П ╤Г╨║╨░╨╖╨░╨╜╨╜╨╛╨│╨╛ ╤И╨░╨│╨░ ╤Б╨╡╤Б╤Б╨╕╨╕.
@@ -286,6 +300,8 @@ func (s *Service) processUpdate(ctx context.Context, update schemes.UpdateInterf
 		return s.handleMessage(ctx, upd)
 	case *schemes.MessageCallbackUpdate:
 		return s.handleCallback(ctx, upd)
+	case *schemes.BotStartedUpdate:
+		return s.handleBotStarted(ctx, upd)
 
 	default:
 		s.log.Debug().
@@ -323,6 +339,12 @@ func (s *Service) logIncomingUpdate(update schemes.UpdateInterface) {
 			event = event.Int64("chat_id", upd.Message.Recipient.ChatId)
 		}
 		event.Msg("incoming callback request")
+	case *schemes.BotStartedUpdate:
+		event = event.
+			Int64("user_id", upd.GetUserID()).
+			Int64("chat_id", upd.GetChatID()).
+			Str("user_name", upd.User.Name)
+		event.Msg("incoming bot started event")
 	default:
 		event.Msg("incoming update request")
 	}
@@ -340,6 +362,25 @@ func (s *Service) handleCallback(ctx context.Context, update *schemes.MessageCal
 			continue
 		}
 		if err := handler(ctx, cbCtx); err != nil && err.Error() != "" {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Service) handleBotStarted(ctx context.Context, update *schemes.BotStartedUpdate) error {
+	startCtx := newBotStartedContext(s, update)
+
+	s.mu.RLock()
+	handlers := append([]BotStartedHandler{}, s.botStartedHandlers...)
+	s.mu.RUnlock()
+
+	for _, handler := range handlers {
+		if handler == nil {
+			continue
+		}
+		if err := handler(ctx, startCtx); err != nil && err.Error() != "" {
 			return err
 		}
 	}

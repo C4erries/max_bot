@@ -140,6 +140,24 @@ func TestServiceHandleCallback(t *testing.T) {
 	require.True(t, callbackCalled)
 }
 
+func TestServiceHandleBotStarted(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService()
+	startCalled := false
+
+	svc.RegisterBotStartedHandler(func(ctx context.Context, start *BotStartedContext) error {
+		startCalled = true
+		require.Equal(t, int64(42), start.UserID())
+		require.Equal(t, int64(7), start.ChatID())
+		return nil
+	})
+
+	err := svc.handleBotStarted(context.Background(), newTestBotStartedUpdate())
+	require.NoError(t, err)
+	require.True(t, startCalled)
+}
+
 func newTestService() *Service {
 	return &Service{
 		log:             zerolog.New(io.Discard),
@@ -181,6 +199,16 @@ func newTestCallbackUpdate(payload string) *schemes.MessageCallbackUpdate {
 			Recipient: schemes.Recipient{
 				ChatId: 7,
 			},
+		},
+	}
+}
+
+func newTestBotStartedUpdate() *schemes.BotStartedUpdate {
+	return &schemes.BotStartedUpdate{
+		ChatId: 7,
+		User: schemes.User{
+			UserId: 42,
+			Name:   "Tester",
 		},
 	}
 }
