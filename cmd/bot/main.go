@@ -9,6 +9,7 @@ import (
 
 	"github.com/c4erries/max_bot/internal/app"
 	"github.com/c4erries/max_bot/internal/appbot"
+	"github.com/c4erries/max_bot/internal/backend"
 	"github.com/c4erries/max_bot/internal/config"
 	"github.com/c4erries/max_bot/internal/httpserver"
 	"github.com/c4erries/max_bot/internal/logger"
@@ -33,7 +34,13 @@ func main() {
 	}
 
 	bot := appbot.NewService(api, log)
-	application := app.New(bot, log, cfg)
+
+	repo, err := backend.NewRepository(cfg.Backend.APIBaseURL, log)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to init backend repository")
+	}
+
+	application := app.New(bot, log, repo)
 
 	if addr := cfg.HTTP.Address; addr != "" {
 		httpSrv := httpserver.New(addr, bot, log)

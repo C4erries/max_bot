@@ -9,7 +9,6 @@ import (
 
 	"github.com/c4erries/max_bot/internal/backend"
 	"github.com/max-messenger/max-bot-api-client-go/schemes"
-	"github.com/rs/zerolog"
 )
 
 type applicationRole = backend.Role
@@ -54,10 +53,9 @@ type applicationCoordinator struct {
 	mockBackend backend.MockApplications
 }
 
-func newApplicationCoordinator(baseURL string, log zerolog.Logger) (*applicationCoordinator, error) {
-	appBackend, err := backend.NewApplications(baseURL, log)
-	if err != nil {
-		return nil, err
+func newApplicationCoordinator(appBackend backend.Applications) (*applicationCoordinator, error) {
+	if appBackend == nil {
+		return nil, errors.New("application backend is nil")
 	}
 
 	var mock backend.MockApplications

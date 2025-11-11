@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/c4erries/max_bot/internal/appbot"
-	"github.com/c4erries/max_bot/internal/config"
+	"github.com/c4erries/max_bot/internal/backend"
 	"github.com/rs/zerolog"
 )
 
@@ -28,27 +28,27 @@ type moduleEntry struct {
 }
 
 // New собирает приложение, регистрирует бота и базовые обработчики.
-func New(bot *appbot.Service, log zerolog.Logger, cfg *config.Config) *Application {
+func New(bot *appbot.Service, log zerolog.Logger, repo backend.Repository) *Application {
 	if bot == nil {
 		panic("app: bot service is nil")
 	}
-	if cfg == nil {
-		panic("app: config is nil")
+	if repo == nil {
+		panic("app: backend repository is nil")
 	}
 
-	applications, err := newApplicationCoordinator(cfg.Backend.APIBaseURL, log)
+	applications, err := newApplicationCoordinator(repo.Applications())
 	if err != nil {
 		panic(fmt.Sprintf("app: %v", err))
 	}
 
-	payments, err := newPaymentService(cfg.Backend.APIBaseURL, log)
+	schedule, err := newScheduleService(repo.Schedule())
 	if err != nil {
 		panic(fmt.Sprintf("app: %v", err))
 	}
 
-	schedule, err := newScheduleService(cfg.Backend.APIBaseURL, log)
-	if err != nil {
-		panic(fmt.Sprintf("app: %v", err))
+	payments := repo.Payments()
+	if payments == nil {
+		panic("app: payments backend is nil")
 	}
 
 	registerDefaultBotHandlers(bot, applications, payments, schedule)

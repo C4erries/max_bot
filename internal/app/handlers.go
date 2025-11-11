@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/c4erries/max_bot/internal/appbot"
+	"github.com/c4erries/max_bot/internal/backend"
 	maxbot "github.com/max-messenger/max-bot-api-client-go"
 	"github.com/max-messenger/max-bot-api-client-go/schemes"
 )
@@ -26,6 +27,7 @@ const (
 	actionApplicationStudentAcademicLeave = "action:application:student:academic_leave"
 	actionApplicationStudentTransfer      = "action:application:student:study_transfer"
 	actionApplicationTeacherWorkCert      = "action:application:teacher:work_certificate"
+	actionApplicationCancel               = "action:application:cancel"
 
 	sessionApplicationFilling = "application:filling"
 )
@@ -54,7 +56,7 @@ var applicationActionPayloads = map[string]applicationActionMeta{
 	},
 }
 
-func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCoordinator, payments *paymentService, schedule *scheduleService) {
+func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCoordinator, payments backend.Payments, schedule *scheduleService) {
 	if bot == nil {
 		panic("app: bot service is nil")
 	}
@@ -122,12 +124,12 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 		metaAction, hasApplicationAction := applicationActionPayloads[payload]
 		switch {
 		case strings.HasPrefix(payload, "menu:"):
-			if err := menus.Send(ctx, cb.ChatID(), cb.SenderID(), payload); err != nil && err.Error() != "" {
+			if err := sendMenuFromCallback(ctx, menus, cb, payload); err != nil && err.Error() != "" {
 				logger := cb.Logger()
 				logger.Error().Err(err).Str("menu_id", payload).Msg("failed to send menu")
 				return cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Меню временно недоступно"})
 			}
-			return cb.Answer(ctx, nil)
+			return nil
 
 		case payload == actionApplicationsOpen:
 			role, err := applications.ResolveRole(ctx, cb.SenderID())
@@ -146,12 +148,12 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 			if menuID == "" {
 				return cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Не удалось определить доступные заявки"})
 			}
-			if err := menus.Send(ctx, cb.ChatID(), cb.SenderID(), menuID); err != nil && err.Error() != "" {
+			if err := sendMenuFromCallback(ctx, menus, cb, menuID); err != nil && err.Error() != "" {
 				logger := cb.Logger()
 				logger.Error().Err(err).Str("menu_id", menuID).Msg("failed to send applications menu")
 				return cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Не удалось открыть список заявок"})
 			}
-			return cb.Answer(ctx, nil)
+			return nil
 		case hasApplicationAction:
 			sessionData, err := applications.PrepareSession(cb.SenderID(), metaAction.role, metaAction.doc)
 			if err != nil {
@@ -190,7 +192,7 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 			if err := cb.Answer(ctx, nil); err != nil {
 				return err
 			}
-			return cb.ReplyText(ctx, sessionData.StartPrompt())
+			return sendApplicationPrompt(ctx, cb.Service(), cb.ChatID(), cb.SenderID(), sessionData.StartPrompt())
 		case payload == actionPaymentRequestOrder:
 			status, err := payments.Status(ctx, cb.SenderID())
 			if err != nil {
@@ -224,20 +226,32 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 			backRow := builder.AddRow()
 			backRow.AddCallback("Назад", schemes.DEFAULT, menuRoot)
 
+			body := &schemes.NewMessageBody{
+				Text: "Выберите платеж, который хотите внести:",
+			}
+			body.Attachments = append(body.Attachments, schemes.NewInlineKeyboardAttachmentRequest(builder.Build()))
+
+			if err := cb.Answer(ctx, &schemes.CallbackAnswer{Message: body}); err == nil {
+				return nil
+			} else {
+				logger := cb.Logger()
+				logger.Warn().Err(err).Msg("failed to update payments menu via callback answer, fallback to sending new one")
+			}
+
 			if err := cb.Answer(ctx, nil); err != nil {
 				return err
 			}
 
-			msg := maxbot.NewMessage().SetText("Выберите платеж, который хотите внести:")
+			msg := maxbot.NewMessage().SetText(body.Text)
 			msg.SetUser(cb.SenderID())
 			msg.SetChat(cb.ChatID())
 			msg.AddKeyboard(builder)
 			_, sendErr := cb.Service().SendMessage(ctx, msg)
 			return sendErr
 		case payload == actionPaymentDormPay:
-			return sendPaymentLink(ctx, cb, payments, paymentKindDorm, "Оплатить общежитие можно по ссылке: %s")
+			return sendPaymentLink(ctx, cb, payments, backend.PaymentKindDorm, "Оплатить общежитие можно по ссылке: %s")
 		case payload == actionPaymentTuitionPay:
-			return sendPaymentLink(ctx, cb, payments, paymentKindTuition, "Оплатить обучение можно по ссылке: %s")
+			return sendPaymentLink(ctx, cb, payments, backend.PaymentKindTuition, "Оплатить обучение можно по ссылке: %s")
 		case payload == actionScheduleToday:
 			text, err := schedule.Today(ctx, cb.SenderID())
 			if err != nil {
@@ -249,6 +263,19 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 				return err
 			}
 			return cb.ReplyText(ctx, text)
+		case payload == actionApplicationCancel:
+			state, ok := cb.SessionState()
+			if !ok || state.Step != sessionApplicationFilling {
+				return cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Нет заявки для отмены"})
+			}
+			cb.ClearSessionState()
+			if err := cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Заполнение отменено"}); err != nil {
+				return err
+			}
+			if err := cb.ReplyText(ctx, "Заполнение заявки остановлено. Можете начать заново через меню."); err != nil {
+				return err
+			}
+			return menus.Send(ctx, cb.ChatID(), cb.SenderID(), menuRoot)
 		default:
 			return cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Неизвестное действие"})
 		}
@@ -329,7 +356,7 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 			Payload: payloadBytes,
 		})
 
-		return msg.ReplyText(ctx, progress.NextPrompt())
+		return sendApplicationPrompt(ctx, msg.Service(), msg.ChatID(), msg.SenderID(), progress.NextPrompt())
 	})
 
 	bot.RegisterMessageHandler(func(ctx context.Context, msg *appbot.MessageContext) error {
@@ -418,6 +445,45 @@ func registerMenus(menus *MenuRegistry) {
 	})
 }
 
+func sendMenuFromCallback(ctx context.Context, menus *MenuRegistry, cb *appbot.CallbackContext, menuID string) error {
+	body, err := menus.buildMenuBody(menuID)
+	if err != nil {
+		return err
+	}
+	answer := &schemes.CallbackAnswer{Message: body}
+	if err := cb.Answer(ctx, answer); err != nil {
+		logger := cb.Logger()
+		logger.Warn().
+			Err(err).
+			Str("menu_id", menuID).
+			Msg("failed to update menu via callback answer, fallback to sending new one")
+		return menus.Send(ctx, cb.ChatID(), cb.SenderID(), menuID)
+	}
+	return nil
+}
+
+func sendApplicationPrompt(ctx context.Context, svc *appbot.Service, chatID, userID int64, text string) error {
+	if svc == nil {
+		return fmt.Errorf("application prompt sender is nil")
+	}
+
+	msg := maxbot.NewMessage().SetText(text)
+	if userID != 0 {
+		msg.SetUser(userID)
+	}
+	if chatID != 0 {
+		msg.SetChat(chatID)
+	}
+
+	if builder := svc.NewKeyboardBuilder(); builder != nil {
+		builder.AddRow().AddCallback("Отменить заполнение", schemes.NEGATIVE, actionApplicationCancel)
+		msg.AddKeyboard(builder)
+	}
+
+	_, err := svc.SendMessage(ctx, msg)
+	return err
+}
+
 // encodeAttachments приводит список вложений к JSON-строке,
 // чтобы backend смог восстановить исходные файлы.
 func encodeAttachments(raw []json.RawMessage) (string, error) {
@@ -429,7 +495,7 @@ func encodeAttachments(raw []json.RawMessage) (string, error) {
 }
 
 // sendPaymentLink запрашивает ссылку на оплату и отправляет её пользователю.
-func sendPaymentLink(ctx context.Context, cb *appbot.CallbackContext, payments *paymentService, kind paymentKind, template string) error {
+func sendPaymentLink(ctx context.Context, cb *appbot.CallbackContext, payments backend.Payments, kind backend.PaymentKind, template string) error {
 	link, err := payments.Link(ctx, cb.SenderID(), kind)
 	if err != nil {
 		logger := cb.Logger()

@@ -47,14 +47,45 @@ func (mr *MenuRegistry) Register(menu Menu) {
 
 // Send отправляет указанное меню пользователю.
 func (mr *MenuRegistry) Send(ctx context.Context, chatID, userID int64, menuID string) error {
+	title, keyboard, err := mr.renderMenu(menuID)
+	if err != nil {
+		return err
+	}
+
+	msg := maxbot.NewMessage().SetText(title)
+	if userID != 0 {
+		msg.SetUser(userID)
+	}
+	if chatID != 0 {
+		msg.SetChat(chatID)
+	}
+	msg.AddKeyboard(keyboard)
+
+	_, err = mr.bot.SendMessage(ctx, msg)
+	return err
+}
+
+func (mr *MenuRegistry) buildMenuBody(menuID string) (*schemes.NewMessageBody, error) {
+	title, keyboard, err := mr.renderMenu(menuID)
+	if err != nil {
+		return nil, err
+	}
+	body := &schemes.NewMessageBody{
+		Text: title,
+	}
+	body.Attachments = append(body.Attachments, schemes.NewInlineKeyboardAttachmentRequest(keyboard.Build()))
+	return body, nil
+}
+
+func (mr *MenuRegistry) renderMenu(menuID string) (string, *maxbot.Keyboard, error) {
 	menu, ok := mr.menus[menuID]
 	if !ok {
-		return fmt.Errorf("menu %q is not registered", menuID)
+		return "", nil, fmt.Errorf("menu %q is not registered", menuID)
 	}
 
 	builder := mr.bot.NewKeyboardBuilder()
 	if builder == nil {
-		return fmt.Errorf("menu: keyboard builder is nil")
+		return "", nil, fmt.Errorf("menu: keyboard builder is nil")
 	}
 
 	for _, row := range menu.Rows {
@@ -70,15 +101,5 @@ func (mr *MenuRegistry) Send(ctx context.Context, chatID, userID int64, menuID s
 		}
 	}
 
-	msg := maxbot.NewMessage().SetText(menu.Title)
-	if userID != 0 {
-		msg.SetUser(userID)
-	}
-	if chatID != 0 {
-		msg.SetChat(chatID)
-	}
-	msg.AddKeyboard(builder)
-
-	_, err := mr.bot.SendMessage(ctx, msg)
-	return err
+	return menu.Title, builder, nil
 }

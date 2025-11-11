@@ -115,3 +115,8 @@ func (mc *MessageContext) SetSessionState(state SessionState) {
 func (mc *MessageContext) ClearSessionState() {
 	mc.service.ClearSessionState(mc.SenderID())
 }
+
+// Service возвращает bot service для расширенных операций отправки сообщений.
+func (mc *MessageContext) Service() *Service {
+	return mc.service
+}
