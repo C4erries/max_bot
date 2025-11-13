@@ -1,6 +1,6 @@
 # Max Bot
 
-Бот общается с внешним backend-API в `internal/backend`, а также поднимает дополнительное HTTP-API (`/healthz`, `/notify/{userID}`, `/notify/bulk`), чтобы внешние сервисы могли отправлять пользователям уведомления.
+Бот общается с внешним backend-API в `internal/backend`, а также поднимает дополнительное HTTP-API (`/healthz`, `/notify/{userID}`, `/notify/bulk`, `/notify/ready/{userID}`, `/notify/payment/tuition/{userID}`), чтобы внешние сервисы могли отправлять пользователям уведомления.
 
 Основные возможности:
 - главное меню и набор команд `/start`, `/help`;
@@ -20,7 +20,7 @@
 | Переменная | Обязательно | Значение по умолчанию | Описание |
 |------------|-------------|-----------------------|----------|
 | `BOT_TOKEN` | да | — | Токен бота Max, полученный в админке Max. Используется SDK `github.com/max-messenger/max-bot-api-client-go`. |
-| `HTTP_ADDRESS` | нет | `:8080` | Адрес HTTP-сервера (`host:port`) для `/healthz`, `/notify/{userID}` и `/notify/bulk`. |
+| `HTTP_ADDRESS` | нет | `:8080` | Адрес HTTP-сервера (`host:port`) для `/healthz`, `/notify/{userID}`, `/notify/bulk`, `/notify/ready/{userID}` и `/notify/payment/tuition/{userID}`. |
 | `HTTP_BACKEND_TOKEN` | нет | — | (Опционально) Секретный токен для защиты HTTP-ручек. Если указан, backend обязан слать `Authorization: Bearer <token>`. Если не задан, доступ ограничивается только сетью (например, через Docker Compose). |
 | `LOG_LEVEL` | нет | `info` | Уровень логирования Zerolog (`debug`, `info`, `warn`, ...). |
 | `BACKEND_API_BASE_URL` | нет | пусто | Базовый URL backend-API. Если не задан, функции, требующие данных backend, будут недоступны. |
@@ -47,7 +47,7 @@
    go build -o max-bot ./cmd/bot
    ```
 
-Во время запуска бот подписывается на обновления Max и (если `HTTP_ADDRESS` не пуст) стартует HTTP-сервер. `/healthz` возвращает `{ "status": "ok" }`, а POST `/notify/{userID}` принимает тело `{"text":"..."}` и инициирует отправку сообщения пользователю. POST `/notify/bulk` принимает `{"text":"...","sender_id":123,"user_ids":[1,2,3]}` и рассылает то же сообщение сразу нескольким пользователям. Если задан `HTTP_BACKEND_TOKEN`, backend обязан слать заголовок `Authorization: Bearer $HTTP_BACKEND_TOKEN`, иначе запрос будет отклонён со статусом `401`. Если токен не указан, доступ к POST-ручкам следует ограничить на сетевом уровне (например, приватной Docker Compose-сетью без публикации порта наружу).
+Во время запуска бот подписывается на обновления Max и (если `HTTP_ADDRESS` не пуст) стартует HTTP-сервер. `/healthz` возвращает `{ "status": "ok" }`, POST `/notify/{userID}` принимает тело `{"text":"..."}` и инициирует отправку сообщения пользователю, POST `/notify/bulk` принимает `{"text":"...","sender_id":123,"user_ids":[1,2,3]}` и рассылает то же сообщение сразу нескольким пользователям, POST `/notify/ready/{userID}` запускает сценарий готового документа, а POST `/notify/payment/tuition/{userID}` напоминает про оплату обучения и отправляет пользователю свежую ссылку на платёж. Если задан `HTTP_BACKEND_TOKEN`, backend обязан слать заголовок `Authorization: Bearer $HTTP_BACKEND_TOKEN`, иначе запрос будет отклонён со статусом `401`. Если токен не указан, доступ к POST-ручкам следует ограничить на сетевом уровне (например, приватной Docker Compose-сетью без публикации порта наружу).
 
 ## Запуск в Docker
 
@@ -82,6 +82,6 @@ docker run --rm \
 - `internal/appbot` — обёртка над клиентом Max и обработчики команд/сообщений.
 - `internal/app` — координаторы бизнес-логики (меню, сценарии заявлений, расписание, платежи).
 - `internal/backend` — клиенты для внутреннего REST API (заявки, платежи, расписание).
-- `internal/httpserver` — лёгкий HTTP-сервер для `/notify` и `/healthz`.
+- `internal/httpserver` — лёгкий HTTP-сервер для `/notify`, `/notify/bulk`, `/notify/ready`, `/notify/payment/tuition` и `/healthz`.
 
 Тесты можно запускать командой `go test ./...`.

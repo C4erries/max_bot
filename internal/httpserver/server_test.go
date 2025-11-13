@@ -15,14 +15,17 @@ import (
 )
 
 type stubNotifier struct {
-	notifyUserID int64
-	readyUserID  int64
-	text         string
-	notifyErr    error
-	readyErr     error
-	calledNotify bool
-	calledReady  bool
-	users        []int64
+	notifyUserID  int64
+	readyUserID   int64
+	tuitionUserID int64
+	text          string
+	notifyErr     error
+	readyErr      error
+	tuitionErr    error
+	calledNotify  bool
+	calledReady   bool
+	calledTuition bool
+	users         []int64
 }
 
 func (n *stubNotifier) NotifyUser(_ context.Context, userID int64, text string) error {
@@ -37,6 +40,12 @@ func (n *stubNotifier) NotifyDocumentReady(_ context.Context, userID int64) erro
 	n.calledReady = true
 	n.readyUserID = userID
 	return n.readyErr
+}
+
+func (n *stubNotifier) NotifyTuitionPaymentReminder(_ context.Context, userID int64) error {
+	n.calledTuition = true
+	n.tuitionUserID = userID
+	return n.tuitionErr
 }
 
 func newTestServer(t *testing.T) (*Server, *stubNotifier) {
@@ -256,4 +265,48 @@ func TestHandleNotifyReadyNotifierError(t *testing.T) {
 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	require.True(t, notifier.calledReady)
+}
+
+func TestHandleNotifyTuitionReminderSuccess(t *testing.T) {
+	t.Parallel()
+
+	srv, notifier := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/notify/payment/tuition/33", nil)
+	rec := httptest.NewRecorder()
+
+	srv.handleNotifyTuitionReminder(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.True(t, notifier.calledTuition)
+	require.Equal(t, int64(33), notifier.tuitionUserID)
+}
+
+func TestHandleNotifyTuitionReminderValidation(t *testing.T) {
+	t.Parallel()
+
+	srv, notifier := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/notify/payment/tuition/", nil)
+	rec := httptest.NewRecorder()
+
+	srv.handleNotifyTuitionReminder(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.False(t, notifier.calledTuition)
+}
+
+func TestHandleNotifyTuitionReminderNotifierError(t *testing.T) {
+	t.Parallel()
+
+	srv, notifier := newTestServer(t)
+	notifier.tuitionErr = errors.New("boom")
+
+	req := httptest.NewRequest(http.MethodPost, "/notify/payment/tuition/77", nil)
+	rec := httptest.NewRecorder()
+
+	srv.handleNotifyTuitionReminder(rec, req)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.True(t, notifier.calledTuition)
 }

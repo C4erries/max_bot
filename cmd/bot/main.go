@@ -42,6 +42,11 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to init backend repository")
 	}
 
+	payments := repo.Payments()
+	if payments == nil {
+		log.Fatal().Msg("failed to init payments backend")
+	}
+
 	application := app.New(bot, log, repo)
 
 	if addr := strings.TrimSpace(cfg.HTTP.Address); addr != "" {
@@ -49,7 +54,7 @@ func main() {
 		if token == "" {
 			log.Warn().Msg("HTTP backend token is empty; relying on docker network isolation")
 		}
-		notifier := app.NewNotifier(bot)
+		notifier := app.NewNotifier(bot, payments)
 		httpSrv := httpserver.New(addr, notifier, token, log)
 		application.RegisterModule("http", httpSrv)
 	}
