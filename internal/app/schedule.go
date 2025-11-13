@@ -29,20 +29,18 @@ func (s *scheduleService) Today(ctx context.Context, userID int64) (string, erro
 		return "", err
 	}
 	if len(lessons) == 0 {
-		return "<b>На сегодня пар нет — отдыхайте!</b>", nil
+		return "На сегодня пар нет — отдыхайте!", nil
 	}
 
 	var b strings.Builder
-	b.WriteString("<b>Расписание на сегодня:</b><br/>")
+	b.WriteString("📅Ваше расписание на сегодня:\n\n")
 	for i, lesson := range lessons {
 		timeText := html.EscapeString(lesson.Time)
 		titleText := html.EscapeString(lesson.Title)
 		locationText := html.EscapeString(lesson.Location)
-		fmt.Fprintf(&b, "%d) <b>%s</b> — %s", i+1, timeText, titleText)
-		if locationText != "" {
-			fmt.Fprintf(&b, " <i>(%s)</i>", locationText)
-		}
-		b.WriteString("<br/>")
+		fmt.Fprintf(&b, "%d) %s\n 📚%s\n 🏛%s", i+1, timeText, titleText, locationText)
+		b.WriteString("\n\n")
 	}
+	b.WriteString("Хорошего дня! 🎉✨")
 	return b.String(), nil
 }
