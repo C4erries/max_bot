@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 // Notifier описывает возможность отправлять пользователю с указанным идентификатором текстовое сообщение.
 type Notifier interface {
 	NotifyUser(ctx context.Context, userID int64, text string) error
+	NotifyDocumentReady(ctx context.Context, userID int64) error
 }
 
 // Server - минимальный HTTP-API, который проксирует уведомления в сервис бота.
@@ -46,6 +48,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("POST /notify/", s.handleNotify)
+	mux.HandleFunc("POST /notify/ready/", s.handleNotifyReady)
 
 	server := &http.Server{
 		Addr:    s.addr,
@@ -81,16 +84,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
-	idPart := strings.TrimPrefix(r.URL.Path, "/notify/")
-	idPart = strings.Trim(idPart, "/")
-	if idPart == "" {
-		writeError(w, http.StatusBadRequest, "user id is required")
-		return
-	}
-
-	userID, err := strconv.ParseInt(idPart, 10, 64)
-	if err != nil || userID <= 0 {
-		writeError(w, http.StatusBadRequest, "user id must be a positive integer")
+	userID, err := parseUserID(r.URL.Path, "/notify/")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -113,6 +109,22 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 }
 
+func (s *Server) handleNotifyReady(w http.ResponseWriter, r *http.Request) {
+	userID, err := parseUserID(r.URL.Path, "/notify/ready/")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := s.notifier.NotifyDocumentReady(r.Context(), userID); err != nil && err.Error() != "" {
+		s.log.Error().Err(err).Int64("user_id", userID).Msg("failed to notify ready document")
+		writeError(w, http.StatusInternalServerError, "failed to deliver notification")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+}
+
 type notifyRequest struct {
 	Text string `json:"text"`
 }
@@ -128,4 +140,19 @@ func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func parseUserID(path, prefix string) (int64, error) {
+	idPart := strings.TrimPrefix(path, prefix)
+	idPart = strings.Trim(idPart, "/")
+	if idPart == "" {
+		return 0, fmt.Errorf("user id is required")
+	}
+
+	userID, err := strconv.ParseInt(idPart, 10, 64)
+	if err != nil || userID <= 0 {
+		return 0, fmt.Errorf("user id must be a positive integer")
+	}
+
+	return userID, nil
 }

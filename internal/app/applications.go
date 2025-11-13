@@ -216,12 +216,12 @@ func (d applicationSessionData) IsCompleted() bool {
 
 func renderFieldPrompt(field applicationField, index, total int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Шаг %d/%d.\n%s", index+1, total, field.Label)
+	fmt.Fprintf(&b, "Шаг %d/%d.\n\n%s", index+1, total, field.Label)
 	if field.Required {
-		b.WriteString(" (обязательно)")
+		b.WriteString(" [обязательно]")
 	}
 	if field.Kind == fieldKindFile {
-		b.WriteString("\nОтправьте файл или несколько файлов следующим сообщением.")
+		b.WriteString("\n\nОтправьте файл или несколько файлов следующим сообщением.")
 	}
 	if field.Placeholder != "" {
 		fmt.Fprintf(&b, "\nПодсказка: %s", field.Placeholder)
@@ -259,7 +259,7 @@ var fixedApplicationForms = map[applicationType]applicationForm{
 		Fields: []applicationField{
 			{
 				Name:     "supporting_files",
-				Label:    "Прикрепите документы, подтверждающие причину оформления",
+				Label:    "Чтобы мы могли начать обработку вашей заявки, пожалуйста, пришлите в этот чат фотографии или сканы документов, подтверждающих основание для ухода в академический отпуск (например, медицинская справка, повестка в армию и т.д.).",
 				Kind:     fieldKindFile,
 				Required: true,
 			},

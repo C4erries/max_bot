@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/c4erries/max_bot/internal/appbot"
@@ -28,8 +29,11 @@ const (
 	actionApplicationStudentTransfer      = "action:application:student:study_transfer"
 	actionApplicationTeacherWorkCert      = "action:application:teacher:work_certificate"
 	actionApplicationCancel               = "action:application:cancel"
+	actionReadyDocumentPickup             = "action:ready_document:pickup"
+	actionReadyDocumentEmail              = "action:ready_document:email"
 
 	sessionApplicationFilling = "application:filling"
+	sessionReadyDocumentEmail = "ready_document:email"
 )
 
 type applicationActionMeta struct {
@@ -55,6 +59,39 @@ var applicationActionPayloads = map[string]applicationActionMeta{
 		doc:  applicationTypeWorkCertificate,
 	},
 }
+
+const (
+	readyDocumentNotificationText = `🎉 Ваша заявка готова!
+
+✅ Статус: Обработана и готова к получению
+
+Теперь вы можете:
+• Забрать оригинал в деканате 📍
+• Запросить отправку на вашу электронную почту 📧
+
+Выберите удобный способ получения!`
+	readyDocumentPickupText = `✅ Отлично! Ваша справка уже ждёт вас в деканате. 📄
+
+📍 Не забудьте взять с собой студенческий билет или паспорт.
+
+Часы работы деканата:
+Пн-Пт: с 9:00 до 18:00
+Обед: с 13:00 до 14:00
+
+Желаем хорошего дня! 😊`
+	readyDocumentEmailPromptText = `Хорошо! Чтобы отправить справку на email, пришлите нам, пожалуйста, вашу рабочую почту.
+📧 Убедитесь, что почта корректна, чтобы письмо не потерялось.`
+	readyDocumentEmailInvalidText = `Пожалуйста, укажите корректный рабочий email. Например: ivan.ivanov@university.ru`
+	readyDocumentEmailSuccessText = `Отлично! Ваша справка с места работы была направлена на указанную электронную почту. 📨
+
+Что делать дальше:
+
+Проверьте входящие сообщения, а также папку «Спам», если письмо не пришло в течение 15 минут.
+
+Если вы не получили письмо, пожалуйста, сообщите нам об этом.`
+)
+
+var emailRegexp = regexp.MustCompile(`^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$`)
 
 func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCoordinator, payments backend.Payments, schedule *scheduleService) {
 	if bot == nil {
@@ -263,6 +300,19 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 				return err
 			}
 			return cb.ReplyText(ctx, text)
+		case payload == actionReadyDocumentPickup:
+			if err := cb.Answer(ctx, nil); err != nil {
+				return err
+			}
+			return cb.ReplyText(ctx, readyDocumentPickupText)
+		case payload == actionReadyDocumentEmail:
+			cb.SetSessionState(appbot.SessionState{
+				Step: sessionReadyDocumentEmail,
+			})
+			if err := cb.Answer(ctx, nil); err != nil {
+				return err
+			}
+			return cb.ReplyText(ctx, readyDocumentEmailPromptText)
 		case payload == actionApplicationCancel:
 			state, ok := cb.SessionState()
 			if !ok || state.Step != sessionApplicationFilling {
@@ -359,6 +409,22 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 		return sendApplicationPrompt(ctx, msg.Service(), msg.ChatID(), msg.SenderID(), progress.NextPrompt())
 	})
 
+	bot.RegisterSessionHandler(sessionReadyDocumentEmail, func(ctx context.Context, msg *appbot.MessageContext, state appbot.SessionState) error {
+		email := strings.TrimSpace(msg.Text())
+		if email == "" {
+			return msg.ReplyText(ctx, readyDocumentEmailPromptText)
+		}
+		if !emailRegexp.MatchString(email) {
+			return msg.ReplyText(ctx, readyDocumentEmailInvalidText)
+		}
+
+		msg.ClearSessionState()
+		if err := msg.ReplyText(ctx, readyDocumentEmailSuccessText); err != nil {
+			return err
+		}
+		return nil
+	})
+
 	bot.RegisterMessageHandler(func(ctx context.Context, msg *appbot.MessageContext) error {
 		text := strings.TrimSpace(msg.Text())
 		if text == "" {
@@ -386,8 +452,16 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 
 func registerMenus(menus *MenuRegistry) {
 	menus.Register(Menu{
-		ID:    menuRoot,
-		Title: "Главное меню: выберите раздел",
+		ID: menuRoot,
+		Title: `Добро пожаловать в главное меню! 🎓
+
+Выберите, что вас интересует:
+
+1. Платежи 💳 — Проверить баланс и оплатить обучение или общежитие.
+2. Расписание 📚 — Посмотреть ваше расписание на текущую неделю.
+3. Заявления 📄 — Подать заявку на справку, академический отпуск или перевод.
+
+Просто нажмите на одну из кнопок ниже, чтобы продолжить! 👇`,
 		Rows: [][]MenuButton{
 			{
 				{Text: "Платежи", Payload: actionPaymentRequestOrder, Intent: schemes.POSITIVE},
@@ -400,11 +474,13 @@ func registerMenus(menus *MenuRegistry) {
 	})
 
 	menus.Register(Menu{
-		ID:    menuSchedule,
-		Title: "Расписание:",
+		ID: menuSchedule,
+		Title: `📅 Какое расписание вас интересует?
+
+Выберите вариант ниже, чтобы посмотреть`,
 		Rows: [][]MenuButton{
 			{
-				{Text: "Показать расписание на сегодня", Payload: actionScheduleToday, Intent: schemes.DEFAULT},
+				{Text: "Сегодня", Payload: actionScheduleToday, Intent: schemes.DEFAULT},
 			},
 			{
 				{Text: "Назад", Payload: menuRoot, Intent: schemes.DEFAULT},
@@ -414,13 +490,13 @@ func registerMenus(menus *MenuRegistry) {
 
 	menus.Register(Menu{
 		ID:    menuApplicationsStudent,
-		Title: "Заявления студентов:",
+		Title: "📄 Выберите тип заявления, которое хотите подать:",
 		Rows: [][]MenuButton{
 			{
-				{Text: "Справка с места учебы", Payload: actionApplicationStudentStudyCert, Intent: schemes.POSITIVE},
+				{Text: "Справка с места обучения 🎓", Payload: actionApplicationStudentStudyCert, Intent: schemes.POSITIVE},
 			},
 			{
-				{Text: "Академический отпуск", Payload: actionApplicationStudentAcademicLeave, Intent: schemes.POSITIVE},
+				{Text: "Справка об уходе в академ 📅", Payload: actionApplicationStudentAcademicLeave, Intent: schemes.POSITIVE},
 			},
 			{
 				{Text: "Перевод на другую программу", Payload: actionApplicationStudentTransfer, Intent: schemes.POSITIVE},
@@ -479,6 +555,30 @@ func sendApplicationPrompt(ctx context.Context, svc *appbot.Service, chatID, use
 		builder.AddRow().AddCallback("Отменить заполнение", schemes.NEGATIVE, actionApplicationCancel)
 		msg.AddKeyboard(builder)
 	}
+
+	_, err := svc.SendMessage(ctx, msg)
+	return err
+}
+
+func sendReadyNotification(ctx context.Context, svc *appbot.Service, userID int64) error {
+	if svc == nil {
+		return fmt.Errorf("ready notification sender is nil")
+	}
+	if userID <= 0 {
+		return fmt.Errorf("ready notification user id must be positive")
+	}
+
+	msg := maxbot.NewMessage().SetText(readyDocumentNotificationText)
+	msg.SetUser(userID)
+
+	builder := svc.NewKeyboardBuilder()
+	if builder == nil {
+		return fmt.Errorf("ready notification keyboard builder is nil")
+	}
+	row := builder.AddRow()
+	row.AddCallback("Забрать в деканате", schemes.POSITIVE, actionReadyDocumentPickup)
+	row.AddCallback("Отправить на почту", schemes.DEFAULT, actionReadyDocumentEmail)
+	msg.AddKeyboard(builder)
 
 	_, err := svc.SendMessage(ctx, msg)
 	return err

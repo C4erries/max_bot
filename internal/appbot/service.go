@@ -1,4 +1,4 @@
-package appbot
+﻿package appbot
 
 import (
 	"context"
@@ -143,7 +143,7 @@ func (s *Service) RegisterCallbackHandler(handler CallbackHandler) {
 	s.callbackHandlers = append(s.callbackHandlers, handler)
 }
 
-// RegisterBotStartedHandler добавляет обработчик события "Start".
+// RegisterBotStartedHandler регистрирует обработчик события "Start".
 func (s *Service) RegisterBotStartedHandler(handler BotStartedHandler) {
 	if handler == nil {
 		return
@@ -252,8 +252,7 @@ func (s *Service) SessionState(userID int64) (SessionState, bool) {
 	}, true
 }
 
-// Run ╤З╨╕╤В╨░╨╡╤В ╨░╨┐╨┤╨╡╨╣╤В╤Л ╨╕╨╖ API ╨┤╨╛ ╨╛╤В╨╝╨╡╨╜╤Л ╨║╨╛╨╜╤В╨╡╨║╤Б╤В╨░.
-// NotifyUser sends a plain text message directly to specified user without relying on chats.
+// NotifyUser отправляет простой текст напрямую пользователю, минуя чат.
 func (s *Service) NotifyUser(ctx context.Context, userID int64, text string) error {
 	text = strings.TrimSpace(text)
 	if userID <= 0 {
@@ -264,6 +263,8 @@ func (s *Service) NotifyUser(ctx context.Context, userID int64, text string) err
 	}
 	return s.sendText(ctx, text, userID, 0)
 }
+
+// Run читает апдейты из API до отмены контекста.
 func (s *Service) Run(ctx context.Context) error {
 	if s.updates == nil {
 		return errors.New("appbot: updates provider is nil")

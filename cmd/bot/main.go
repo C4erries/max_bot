@@ -27,6 +27,7 @@ func main() {
 	}
 
 	log := logger.New(cfg.Logger.Level)
+	logger.RedirectStdLogger(log, cfg.Bot.Token)
 
 	api, err := maxbot.New(cfg.Bot.Token)
 	if err != nil {
@@ -43,7 +44,8 @@ func main() {
 	application := app.New(bot, log, repo)
 
 	if addr := cfg.HTTP.Address; addr != "" {
-		httpSrv := httpserver.New(addr, bot, log)
+		notifier := app.NewNotifier(bot)
+		httpSrv := httpserver.New(addr, notifier, log)
 		application.RegisterModule("http", httpSrv)
 	}
 

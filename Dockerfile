@@ -4,7 +4,6 @@ WORKDIR /src
 
 # Копируем go.mod/go.sum и локальную зависимость, чтобы эффективнее кэшировать загрузку модулей.
 COPY go.mod go.sum ./
-COPY third_party/max-bot-api-client-go ./third_party/max-bot-api-client-go
 RUN go mod download
 
 # Копируем остальной исходный код и собираем бинарник.
