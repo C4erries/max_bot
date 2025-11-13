@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,17 +15,23 @@ import (
 
 // ScheduleLesson описывает одну пару из расписания.
 type ScheduleLesson struct {
-	Time     string `json:"time"`
-	Title    string `json:"title"`
-	Location string `json:"location"`
+	ID      string   `json:"id"`
+	Subject string   `json:"subject"`
+	Teacher string   `json:"teacher"`
+	Room    string   `json:"room"`
+	PairNo  int      `json:"pair_no"`
+	Time    string   `json:"time"`
+	Groups  []string `json:"groups"`
+	Weekday string   `json:"weekday,omitempty"`
+	Date    string   `json:"date,omitempty"`
 }
 
-// Schedule описывает интерфейс для получения расписания пользователя.
+// Schedule инкапсулирует взаимодействие с backend API.
 type Schedule interface {
-	Today(ctx context.Context, userID int64) ([]ScheduleLesson, error)
+	List(ctx context.Context, userID int64, weekStart *time.Time) ([]ScheduleLesson, error)
 }
 
-// NewSchedule возвращает HTTP-клиент или стаб в зависимости от baseURL.
+// NewSchedule возвращает реализацию клиента расписания.
 func NewSchedule(baseURL string, log zerolog.Logger) (Schedule, error) {
 	if strings.TrimSpace(baseURL) == "" {
 		return stubSchedule{}, nil
@@ -60,12 +67,19 @@ func newHTTPSchedule(baseURL string, log zerolog.Logger) (*httpSchedule, error) 
 	}, nil
 }
 
-func (s *httpSchedule) Today(ctx context.Context, userID int64) ([]ScheduleLesson, error) {
-	endpoint := fmt.Sprintf("%s/api/schedule/today?user_id=%d", s.baseURL, userID)
+func (s *httpSchedule) List(ctx context.Context, userID int64, weekStart *time.Time) ([]ScheduleLesson, error) {
+	params := url.Values{}
+	params.Set("max_id", strconv.FormatInt(userID, 10))
+	if weekStart != nil {
+		params.Set("week_start", weekStart.Format("2006-01-02"))
+	}
+
+	endpoint := fmt.Sprintf("%s/schedule?%s", s.baseURL, params.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
+
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -85,11 +99,38 @@ func (s *httpSchedule) Today(ctx context.Context, userID int64) ([]ScheduleLesso
 
 type stubSchedule struct{}
 
-func (stubSchedule) Today(_ context.Context, _ int64) ([]ScheduleLesson, error) {
+func (stubSchedule) List(_ context.Context, _ int64, _ *time.Time) ([]ScheduleLesson, error) {
 	return []ScheduleLesson{
-		{Time: "08:00 – 09:20", Title: "Математика", Location: "Корпус А, 101"},
-		{Time: "09:30 – 10:50", Title: "Теория вероятностей", Location: "Корпус А, 215"},
-		{Time: "11:10 – 12:30", Title: "История", Location: "Корпус Б, 305"},
+		{
+			ID:      "lesson-1",
+			Subject: "Линейная алгебра",
+			Teacher: "Анна Сергеевна",
+			Room:    "ауд. 101",
+			PairNo:  1,
+			Time:    "08:00 — 09:20",
+			Groups:  []string{"ИКБО-01-23"},
+			Weekday: "monday",
+		},
+		{
+			ID:      "lesson-2",
+			Subject: "Теория вероятностей",
+			Teacher: "Павел Михайлович",
+			Room:    "ауд. 215",
+			PairNo:  2,
+			Time:    "09:30 — 10:50",
+			Groups:  []string{"ИКБО-01-23"},
+			Weekday: "monday",
+		},
+		{
+			ID:      "lesson-3",
+			Subject: "Программирование",
+			Teacher: "Екатерина Андреевна",
+			Room:    "ауд. 305",
+			PairNo:  3,
+			Time:    "11:10 — 12:30",
+			Groups:  []string{"ИКБО-01-23"},
+			Weekday: "tuesday",
+		},
 	}, nil
 }
 

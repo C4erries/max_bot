@@ -23,6 +23,7 @@ const (
 	actionPaymentDormPay                  = "action:payment:pay_dorm"
 	actionPaymentTuitionPay               = "action:payment:pay_tuition"
 	actionScheduleToday                   = "action:schedule:today"
+	actionScheduleWeek                    = "action:schedule:week"
 	actionApplicationsOpen                = "action:applications:open"
 	actionApplicationStudentStudyCert     = "action:application:student:study_certificate"
 	actionApplicationStudentAcademicLeave = "action:application:student:academic_leave"
@@ -317,6 +318,17 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 				return err
 			}
 			return cb.ReplyText(ctx, text)
+		case payload == actionScheduleWeek:
+			text, err := schedule.Week(ctx, cb.SenderID())
+			if err != nil {
+				logger := cb.Logger()
+				logger.Error().Err(err).Msg("failed to fetch weekly schedule")
+				return cb.Answer(ctx, &schemes.CallbackAnswer{Notification: "Не удалось получить недельное расписание"})
+			}
+			if err := cb.Answer(ctx, nil); err != nil {
+				return err
+			}
+			return cb.ReplyText(ctx, text)
 		case payload == actionReadyDocumentPickup:
 			if err := cb.Answer(ctx, nil); err != nil {
 				return err
@@ -498,6 +510,7 @@ func registerMenus(menus *MenuRegistry) {
 		Rows: [][]MenuButton{
 			{
 				{Text: "Сегодня", Payload: actionScheduleToday, Intent: schemes.DEFAULT},
+				{Text: "На эту неделю", Payload: actionScheduleWeek, Intent: schemes.DEFAULT},
 			},
 			{
 				{Text: "Назад", Payload: menuRoot, Intent: schemes.DEFAULT},
