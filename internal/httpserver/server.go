@@ -17,6 +17,7 @@ import (
 type Notifier interface {
 	NotifyUser(ctx context.Context, userID int64, text string) error
 	NotifyDocumentReady(ctx context.Context, userID int64) error
+	NotifyTuitionPaymentReminder(ctx context.Context, userID int64) error
 }
 
 // Server - минимальный HTTP-API, который проксирует уведомления в сервис бота.
@@ -52,6 +53,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /notify/bulk", s.guard(s.handleNotifyBulk))
 	mux.HandleFunc("POST /notify/", s.guard(s.handleNotify))
 	mux.HandleFunc("POST /notify/ready/", s.guard(s.handleNotifyReady))
+	mux.HandleFunc("POST /notify/payment/tuition/", s.guard(s.handleNotifyTuitionReminder))
 
 	server := &http.Server{
 		Addr:    s.addr,
@@ -121,6 +123,22 @@ func (s *Server) handleNotifyReady(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.notifier.NotifyDocumentReady(r.Context(), userID); err != nil && err.Error() != "" {
 		s.log.Error().Err(err).Int64("user_id", userID).Msg("failed to notify ready document")
+		writeError(w, http.StatusInternalServerError, "failed to deliver notification")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+}
+
+func (s *Server) handleNotifyTuitionReminder(w http.ResponseWriter, r *http.Request) {
+	userID, err := parseUserID(r.URL.Path, "/notify/payment/tuition/")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := s.notifier.NotifyTuitionPaymentReminder(r.Context(), userID); err != nil {
+		s.log.Error().Err(err).Int64("user_id", userID).Msg("failed to send tuition payment reminder")
 		writeError(w, http.StatusInternalServerError, "failed to deliver notification")
 		return
 	}
