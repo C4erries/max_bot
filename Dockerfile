@@ -10,9 +10,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /bin/max-bot ./cmd/bot
 
-FROM alpine:3.20
+FROM gcr.io/distroless/static-debian12
 
-RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=builder /bin/max-bot ./max-bot
 
