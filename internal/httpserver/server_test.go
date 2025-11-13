@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -21,11 +22,13 @@ type stubNotifier struct {
 	readyErr     error
 	calledNotify bool
 	calledReady  bool
+	users        []int64
 }
 
 func (n *stubNotifier) NotifyUser(_ context.Context, userID int64, text string) error {
 	n.calledNotify = true
 	n.notifyUserID = userID
+	n.users = append(n.users, userID)
 	n.text = text
 	return n.notifyErr
 }
@@ -37,9 +40,13 @@ func (n *stubNotifier) NotifyDocumentReady(_ context.Context, userID int64) erro
 }
 
 func newTestServer(t *testing.T) (*Server, *stubNotifier) {
+	return newTestServerWithToken(t, "test-token")
+}
+
+func newTestServerWithToken(t *testing.T, token string) (*Server, *stubNotifier) {
 	t.Helper()
 	notifier := &stubNotifier{}
-	srv := New(":0", notifier, zerolog.New(io.Discard))
+	srv := New(":0", notifier, token, zerolog.New(io.Discard))
 	return srv, notifier
 }
 
@@ -92,6 +99,119 @@ func TestHandleNotifyNotifierError(t *testing.T) {
 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	require.True(t, notifier.calledNotify)
+}
+
+func TestHandleNotifyBulkSuccess(t *testing.T) {
+	t.Parallel()
+
+	srv, notifier := newTestServer(t)
+	body := `{"text":" bulk message ","sender_id":12,"user_ids":[1,2,2]}`
+
+	req := httptest.NewRequest(http.MethodPost, "/notify/bulk", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	srv.handleNotifyBulk(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.True(t, notifier.calledNotify)
+	require.Equal(t, []int64{1, 2}, notifier.users)
+	require.Equal(t, "bulk message", notifier.text)
+
+	var resp struct {
+		Status     string `json:"status"`
+		Recipients int    `json:"recipients"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, "sent", resp.Status)
+	require.Equal(t, 2, resp.Recipients)
+}
+
+func TestHandleNotifyBulkValidation(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+		body string
+	}{
+		{"invalid json", `{"text":`},
+		{"empty text", `{"text":" ","sender_id":1,"user_ids":[1]}`},
+		{"missing sender", `{"text":"hi","user_ids":[1]}`},
+		{"invalid sender", `{"text":"hi","sender_id":0,"user_ids":[1]}`},
+		{"no recipients", `{"text":"hi","sender_id":1,"user_ids":[]}`},
+		{"invalid recipient", `{"text":"hi","sender_id":1,"user_ids":[-2,3]}`},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv, notifier := newTestServer(t)
+
+			req := httptest.NewRequest(http.MethodPost, "/notify/bulk", strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
+
+			srv.handleNotifyBulk(rec, req)
+
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			require.False(t, notifier.calledNotify)
+		})
+	}
+}
+
+func TestHandleNotifyBulkNotifierError(t *testing.T) {
+	t.Parallel()
+
+	srv, notifier := newTestServer(t)
+	notifier.notifyErr = errors.New("boom")
+
+	req := httptest.NewRequest(http.MethodPost, "/notify/bulk", strings.NewReader(`{"text":"hi","sender_id":3,"user_ids":[10,11]}`))
+	rec := httptest.NewRecorder()
+
+	srv.handleNotifyBulk(rec, req)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.True(t, notifier.calledNotify)
+	require.Equal(t, []int64{10}, notifier.users)
+}
+
+func TestWithAuth(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newTestServer(t)
+	handler := srv.withAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/notify/1", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	req = httptest.NewRequest(http.MethodPost, "/notify/1", nil)
+	req.Header.Set("Authorization", "Bearer wrong")
+	rec = httptest.NewRecorder()
+	handler(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	req = httptest.NewRequest(http.MethodPost, "/notify/1", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	handler(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestGuardWithoutToken(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newTestServerWithToken(t, "")
+	handler := srv.guard(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/notify/1", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestHandleNotifyReadySuccess(t *testing.T) {

@@ -305,5 +305,5 @@ func (f applicationForm) clone() applicationForm {
 }
 
 func formatSuccessMessage(title string) string {
-	return fmt.Sprintf("Заявка «%s» отправлена. Как только появится ответ — мы сообщим вам в этом чате.", title)
+	return fmt.Sprintf("✅ Заявка принята!\n\nТип документа: %s\nСтатус: ⌛️ Отправлена на обработку\n\nМы уведомим вас о результате в этом чате, как только получим ответ от отдела кадров.", title)
 }

@@ -15,7 +15,8 @@ type BotConfig struct {
 
 // HTTPConfig задаёт адрес вспомогательного HTTP-сервера.
 type HTTPConfig struct {
-	Address string `env:"HTTP_ADDRESS" envDefault:":8080"`
+	Address      string `env:"HTTP_ADDRESS" envDefault:":8080"`
+	BackendToken string `env:"HTTP_BACKEND_TOKEN"`
 }
 
 // LoggerConfig описывает уровень логирования.

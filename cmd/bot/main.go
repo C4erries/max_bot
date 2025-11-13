@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/c4erries/max_bot/internal/app"
@@ -43,9 +44,13 @@ func main() {
 
 	application := app.New(bot, log, repo)
 
-	if addr := cfg.HTTP.Address; addr != "" {
+	if addr := strings.TrimSpace(cfg.HTTP.Address); addr != "" {
+		token := strings.TrimSpace(cfg.HTTP.BackendToken)
+		if token == "" {
+			log.Warn().Msg("HTTP backend token is empty; relying on docker network isolation")
+		}
 		notifier := app.NewNotifier(bot)
-		httpSrv := httpserver.New(addr, notifier, log)
+		httpSrv := httpserver.New(addr, notifier, token, log)
 		application.RegisterModule("http", httpSrv)
 	}
 

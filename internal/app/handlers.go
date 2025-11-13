@@ -61,6 +61,17 @@ var applicationActionPayloads = map[string]applicationActionMeta{
 }
 
 const (
+	startGreetingText = `Привет! 👋
+Я — твой цифровой помощник в университете. 🎓✨
+
+Я помогу:
+→ 🧑‍🎓 Студентам: смотреть расписание, подавать заявки на справки и отпуска, отслеживать статусы и многое другое.
+→ 👨‍🏫 Преподавателям и сотрудникам: управлять расписанием, согласовывать заявки и упростить документооборот.
+
+Чтобы начать, нам нужно тебя узнать.
+Все данные нужны, чтобы показывать только твоё расписание и давать доступ к личным документам. 🔒
+
+Давай начнём? 🚀`
 	readyDocumentNotificationText = `🎉 Ваша заявка готова!
 
 ✅ Статус: Обработана и готова к получению
@@ -110,6 +121,10 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 	registerMenus(menus)
 
 	bot.RegisterBotStartedHandler(func(ctx context.Context, start *appbot.BotStartedContext) error {
+		if err := start.ReplyText(ctx, startGreetingText); err != nil && err.Error() != "" {
+			logger := start.Logger()
+			logger.Warn().Err(err).Msg("failed to send greeting on bot start")
+		}
 		if err := menus.Send(ctx, start.ChatID(), start.UserID(), menuRoot); err != nil && err.Error() != "" {
 			logger := start.Logger()
 			logger.Error().Err(err).Msg("failed to send menu on bot start")
@@ -251,20 +266,22 @@ func registerDefaultBotHandlers(bot *appbot.Service, applications *applicationCo
 
 			row := builder.AddRow()
 			if status.NeedDorm {
-				row.AddCallback("Оплатить общежитие", schemes.POSITIVE, actionPaymentDormPay)
+				row.AddCallback("💳 Оплатить общежитие", schemes.POSITIVE, actionPaymentDormPay)
 			}
 			if status.NeedTuition {
 				if status.NeedDorm {
 					row = builder.AddRow()
 				}
-				row.AddCallback("Оплатить обучение", schemes.POSITIVE, actionPaymentTuitionPay)
+				row.AddCallback("💳 Оплатить обучение", schemes.POSITIVE, actionPaymentTuitionPay)
 			}
 
 			backRow := builder.AddRow()
 			backRow.AddCallback("Назад", schemes.DEFAULT, menuRoot)
 
 			body := &schemes.NewMessageBody{
-				Text: "Выберите платеж, который хотите внести:",
+				Text: `Оплата услуг 🔒
+
+Ваша безопасность — наш приоритет. Все платежи защищены.`,
 			}
 			body.Attachments = append(body.Attachments, schemes.NewInlineKeyboardAttachmentRequest(builder.Build()))
 
